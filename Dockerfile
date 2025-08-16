@@ -105,10 +105,6 @@ COPY custom-builds/Single-Docker-File/startup.sh /startup.sh
 RUN chmod +x /startup.sh
 
 # Expose port for Railway
-EXPOSE 8000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/login || exit 1
+EXPOSE 80
 
 CMD ["/usr/bin/supervisord"]
