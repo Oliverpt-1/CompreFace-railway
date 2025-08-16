@@ -1,5 +1,9 @@
 
-<h1 align="center">Exadel CompreFace is a leading free and open-source face recognition system</h1>
+<h1 align="center">FORKED (and deployable on railway): Exadel CompreFace is a leading free and open-source face recognition system</h1>
+
+Only setup thing necessary is, once you have deployed this Github repo on railway, create an endpoint pointing to port 80. Good to go after that! 
+
+<img width="623" height="264" alt="Screenshot 2025-08-16 at 4 11 04 PM" src="https://github.com/user-attachments/assets/ac670012-aee5-48e5-a6fc-5baad79995ac" />
 
 <p align="center">
     <a target="_blank" href="https://exadel.com/solutions/compreface/">
