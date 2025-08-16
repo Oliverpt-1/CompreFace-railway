@@ -1,31 +1,114 @@
-# Railway Dockerfile for CompreFace
-FROM docker:24-dind
+# Railway Dockerfile for CompreFace - Single Container Version
+ARG BASE_IMAGE=exadel/compreface-core:1.2.0
+ARG VERSION=1.2.0
 
-# Install docker-compose and other dependencies
-RUN apk add --no-cache \
-    docker-compose \
-    curl \
-    bash \
-    python3 \
-    py3-pip
+################# init images start ####################
+FROM exadel/compreface-postgres-db:${VERSION} as postgres_db
+FROM exadel/compreface-admin:${VERSION} as admin
+FROM exadel/compreface-api:${VERSION} as api
+FROM exadel/compreface-fe:${VERSION} as fe
+################# init images end ####################
 
-# Copy application files
-COPY . /app
-WORKDIR /app
+################# compreface-core start ####################
+FROM ${BASE_IMAGE}
 
-# Make sure the environment file is loaded
-ENV DOCKER_BUILDKIT=1
-ENV COMPOSE_DOCKER_CLI_BUILD=1
+ENV UWSGI_PROCESSES=2
+ENV UWSGI_THREADS=1
+################# compreface-core end ####################
 
-# Expose the main port
+ENV TZ=UTC
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+################# compreface-postgres-db start ####################
+# Use Railway's PostgreSQL environment variables with fallbacks
+ENV POSTGRES_USER=${PGUSER:-compreface}
+ENV POSTGRES_PASSWORD=${PGPASSWORD:-M7yfTsBscdqvZs49}
+ENV POSTGRES_DB=${PGDATABASE:-frs}
+ENV PGDATA=/var/lib/postgresql/data
+
+RUN apt-get update && apt-get install -y lsb-release wget
+RUN sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+RUN wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+RUN apt-get update && apt-get install -y postgresql-13 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rm /etc/postgresql/13/main/postgresql.conf
+COPY custom-builds/Single-Docker-File/postgresql.conf /etc/postgresql/13/main/postgresql.conf
+RUN mv /var/lib/postgresql/13/main $PGDATA
+
+COPY --from=postgres_db /docker-entrypoint-initdb.d/initdb.sql /initdb.sql
+
+USER postgres
+
+RUN /etc/init.d/postgresql start && \
+    psql --command "CREATE USER ${POSTGRES_USER} WITH SUPERUSER PASSWORD '${POSTGRES_PASSWORD}';" && \
+    createdb -O ${POSTGRES_USER} ${POSTGRES_DB} && \
+    psql -d ${POSTGRES_DB} -a -f /initdb.sql
+
+RUN cp -r $PGDATA /var/lib/postgresql/default
+
+USER root
+
+################# compreface-postgres-db end ####################
+
+################# compreface-admin start ####################
+
+ENV POSTGRES_URL=jdbc:postgresql://localhost:5432/${POSTGRES_DB}
+ENV SPRING_PROFILES_ACTIVE=dev
+ENV ENABLE_EMAIL_SERVER=${ENABLE_EMAIL_SERVER:-false}
+ENV ADMIN_JAVA_OPTS=${COMPREFACE_ADMIN_JAVA_OPTIONS:--Xmx1g}
+ENV CRUD_PORT=8081
+ENV PYTHON_URL=http://localhost:3000
+ENV MAX_FILE_SIZE=${MAX_FILE_SIZE:-5MB}
+ENV MAX_REQUEST_SIZE=${MAX_REQUEST_SIZE:-10MB}
+
+ENV JAVA_HOME=/opt/java/openjdk
+COPY --from=eclipse-temurin:17.0.8_7-jdk-jammy $JAVA_HOME $JAVA_HOME
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+COPY --from=admin /home/app.jar /app/admin/app.jar
+
+################# compreface-admin end ####################
+
+################# compreface-api start ####################
+
+ENV API_JAVA_OPTS=${COMPREFACE_API_JAVA_OPTIONS:--Xmx4g}
+ENV SAVE_IMAGES_TO_DB=${SAVE_IMAGES_TO_DB:-true}
+ENV API_PORT=8080
+ENV CONNECTION_TIMEOUT=${CONNECTION_TIMEOUT:-10000}
+ENV READ_TIMEOUT=${READ_TIMEOUT:-60000}
+
+COPY --from=api /home/app.jar /app/api/app.jar
+
+################# compreface-api end ####################
+
+################# compreface-fe start ####################
+
+RUN apt-get update && apt-get install -y nginx \
+    && rm -rf /var/lib/apt/lists/*
+RUN adduser --system --no-create-home --shell /bin/false --group --disabled-login nginx
+
+USER nginx
+
+COPY --from=fe /usr/share/nginx/html /usr/share/nginx/html
+COPY --from=fe /etc/nginx/ /etc/nginx/
+COPY custom-builds/Single-Docker-File/nginx.conf /etc/nginx/conf.d/nginx.conf
+
+USER root
+################# compreface-fe end ####################
+
+################# supervisord ####################
+RUN apt-get update && apt-get install -y supervisor mc curl && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /var/log/supervisor
+COPY custom-builds/Single-Docker-File/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY custom-builds/Single-Docker-File/startup.sh /startup.sh
+RUN chmod +x /startup.sh
+
+# Expose port for Railway
 EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/ || exit 1
 
-# Start script
-COPY start-railway.sh /start-railway.sh
-RUN chmod +x /start-railway.sh
-
-CMD ["/start-railway.sh"]
+CMD ["/usr/bin/supervisord"]
